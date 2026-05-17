@@ -258,3 +258,104 @@ def build_summary(store: SqliteStore) -> dict[str, Any]:
         "top_anomalies_latest": anomalies,
         "trend_counts_level1": trends,
     }
+
+
+# Виды флагов для стартовых находок и поля строки, попадающие в находку.
+_HIGHLIGHT_KINDS: tuple[str, ...] = ("below_plan", "trend", "anomaly", "above_plan")
+_HIGHLIGHT_FIELDS: tuple[str, ...] = (
+    "person_fio",
+    "metric_name",
+    "element",
+    "date",
+    "fact",
+    "plan_dev_pct",
+    "wow_change_pct",
+    "zscore",
+)
+
+
+def build_highlights(store: SqliteStore) -> list[dict[str, Any]]:
+    """Топ-находки по датасету — по одной строке на вид флага, последняя неделя.
+
+    Детерминированно, без LLM: каждая находка — это первая (самая значимая)
+    строка find_flags. Дедуп по (человек, метрика, element), чтобы одна и та же
+    строка не попала под двумя ярлыками.
+    """
+    dates = store.schema_overview()["dates"]
+    latest = dates[-1] if dates else None
+    findings: list[dict[str, Any]] = []
+    seen: set[tuple] = set()
+    for kind in _HIGHLIGHT_KINDS:
+        rows = store.find_flags(kind, date=latest).get("rows", [])
+        if not rows:
+            continue
+        row = rows[0]
+        key = (row.get("person_fio"), row.get("metric_name"), row.get("element"))
+        if key in seen:
+            continue
+        seen.add(key)
+        finding: dict[str, Any] = {"kind": kind}
+        for field in _HIGHLIGHT_FIELDS:
+            value = row.get(field)
+            if value is not None:
+                finding[field] = round(value, 2) if isinstance(value, float) else value
+        findings.append(finding)
+    return findings
+
+
+def build_suggestions(
+    store: SqliteStore, highlights: list[dict[str, Any]]
+) -> list[str]:
+    """Наводящие вопросы из находок: каждый ведёт на уже посчитанный инсайт.
+
+    Шаблоны подставляются реальными ФИО/метрикой/element из highlights. Для
+    датасета с одним сотрудником сравнительные вопросы (ранг/аномалия) теряют
+    смысл — заменяются персональными формулировками.
+    """
+    people = store.schema_overview()["people"]
+    multi = sum(1 for p in people if not p["person_is_me"]) > 1
+    by_kind = {h["kind"]: h for h in highlights}
+
+    def _metric_phrase(h: dict[str, Any]) -> str:
+        element = f" по «{h['element']}»" if h.get("element") else ""
+        return f"«{h['metric_name']}»{element}"
+
+    # ФИО ставится топиком («ФИО: вопрос»), а не дополнением: проект намеренно
+    # не склоняет имена, а имя в именительном падеже после предлога читалось бы
+    # неверно.
+    suggestions: list[str] = ["Дай общую оценку: проблемные метрики и сильные стороны."]
+    below = by_kind.get("below_plan")
+    if below:
+        suggestions.append(
+            f"{below['person_fio']}: почему {_metric_phrase(below)} хуже плана?"
+        )
+    trend = by_kind.get("trend")
+    if trend:
+        suggestions.append(
+            "У кого сильнее всего просела динамика и почему?"
+            if multi
+            else f"{trend['person_fio']}: почему просела «{trend['metric_name']}»?"
+        )
+    above = by_kind.get("above_plan")
+    if above:
+        suggestions.append(
+            "В чём сильные стороны команды?"
+            if multi
+            else f"{above['person_fio']}: что идёт лучше плана?"
+        )
+    if below:
+        suggestions.append(
+            f"{below['person_fio']}: из чего складывается «{below['metric_name']}»?"
+        )
+    anomaly = by_kind.get("anomaly")
+    if anomaly and multi:
+        suggestions.append(
+            f"{anomaly['person_fio']}: что за аномалия по «{anomaly['metric_name']}»?"
+        )
+    suggestions.append("Какие метрики и сотрудники есть в датасете?")
+
+    unique: list[str] = []
+    for question in suggestions:
+        if question not in unique:
+            unique.append(question)
+    return unique[:5]

@@ -13,8 +13,18 @@ from typing import Any
 
 from config import settings
 
-from analyzer.agent import build_agent, run_gather, synthesize_answer
-from analyzer.analytics import build_summary, compute_analytics
+from analyzer.agent import (
+    brief_dataset,
+    build_agent,
+    run_gather,
+    synthesize_answer,
+)
+from analyzer.analytics import (
+    build_highlights,
+    build_suggestions,
+    build_summary,
+    compute_analytics,
+)
 from analyzer.llm import build_chat_model
 from analyzer.loader import load_dataset
 from analyzer.pg_cache import PgCache, sync_embeddings
@@ -60,6 +70,55 @@ def _print_summary(summary: dict[str, Any]) -> None:
     print(line)
 
 
+def _highlight_line(h: dict[str, Any]) -> str:
+    """Строка одной находки для блока «На что посмотреть»."""
+    kind = h["kind"]
+    element = f" / {h['element']}" if h.get("element") else ""
+    if kind == "trend":
+        wow = h.get("wow_change_pct")
+        label = "спад" if (wow is not None and wow < 0) else "рост"
+        # Процент недельного изменения у метрик со знаком/около нуля разлетается
+        # до абсурдных величин — направление несёт сам ярлык, число опускаем.
+        detail = ""
+    elif kind == "anomaly":
+        label = "аномалия"
+        zscore = h.get("zscore")
+        detail = f"z={zscore}" if zscore is not None else ""
+    else:
+        label = "хуже плана" if kind == "below_plan" else "сильная сторона"
+        dev = h.get("plan_dev_pct")
+        detail = f"отклонение от плана {dev:+.1f}%" if dev is not None else ""
+    detail = f": {detail}" if detail else ""
+    return f"  • [{label}] {h['person_fio']} — {h['metric_name']}{element}{detail}"
+
+
+def _print_suggestions(suggestions: list[str]) -> None:
+    """Нумерованный список наводящих вопросов (на старте и по команде «?»)."""
+    if not suggestions:
+        return
+    print("\nС чего начать (введите вопрос или «?» — повторить список):")
+    for i, question in enumerate(suggestions, 1):
+        print(f"  {i}. {question}")
+
+
+def _print_briefing(
+    brief: str | None,
+    highlights: list[dict[str, Any]],
+    suggestions: list[str],
+) -> None:
+    """Стартовый экран поверх сводки: абзац «Главное», находки, вопросы."""
+    line = "=" * 64
+    if brief:
+        print(f"\n{line}\nГЛАВНОЕ\n{line}")
+        print(brief.strip())
+    if highlights:
+        print("\nНа что посмотреть:")
+        for h in highlights:
+            print(_highlight_line(h))
+    _print_suggestions(suggestions)
+    print(line)
+
+
 def main() -> int:
     try:
         settings.validate()
@@ -99,8 +158,6 @@ def main() -> int:
         f"новых {stats['added']}, из кэша {stats['cached']}"
     )
 
-    _print_summary(build_summary(store))
-
     tools = build_tools(store, pg)
     try:
         # Стадия 1 — агент сбора (с инструментами). Стадия 2 — модель синтеза
@@ -112,7 +169,24 @@ def main() -> int:
         pg.close()
         return 1
 
-    print("\nГотов к вопросам. 'exit' или пустая строка — выход.")
+    summary = build_summary(store)
+    _print_summary(summary)
+
+    # Стартовый экран: детерминированные находки и наводящие вопросы — всегда;
+    # связный LLM-абзац — по возможности, его сбой не критичен.
+    highlights = build_highlights(store)
+    suggestions = build_suggestions(store, highlights)
+    try:
+        brief = brief_dataset(synth_model, summary, highlights)
+    except Exception as exc:
+        brief = None
+        print(f"(LLM-обзор недоступен: {exc})")
+    _print_briefing(brief, highlights, suggestions)
+
+    print(
+        "\nГотов к вопросам. 'exit' или пустая строка — выход, "
+        "'?' — список вопросов."
+    )
     from langchain_core.messages import AIMessage, HumanMessage
 
     # История — только пары «вопрос/ответ» без промежуточных вызовов инструментов:
@@ -126,6 +200,9 @@ def main() -> int:
             break
         if not question or question.lower() in _EXIT_WORDS:
             break
+        if question == "?":
+            _print_suggestions(suggestions)
+            continue
         try:
             # Стадия 1: агент собирает данные инструментами.
             gathered, completed = run_gather(

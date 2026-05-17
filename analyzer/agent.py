@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from langchain.agents import create_agent
@@ -103,6 +104,17 @@ _SYNTHESIS_PROMPT = """\
 - Если в данных есть ошибка или их недостаточно для ответа — честно скажи об этом,
   не подставляй похожие значения.
 - Отвечай по делу: конкретные числа, имена, периоды.
+"""
+
+_BRIEF_PROMPT = """\
+Ты — аналитик метрик. Тебе дана детерминированная сводка по датасету и список
+ключевых находок. Напиши КРАТКО (2-3 предложения) главное: общее состояние и на
+что стоит обратить внимание в первую очередь.
+
+Правила:
+- Опирайся ТОЛЬКО на приведённые данные. Числа не выдумывай и не пересчитывай.
+- Имена людей и названия метрик переноси дословно.
+- Связный текст на русском, без приветствий, без списков и заголовков.
 """
 
 
@@ -266,5 +278,26 @@ def synthesize_answer(model: Any, question: str, messages: list[Any]) -> str:
     )
     response = model.invoke(
         [SystemMessage(content=_SYNTHESIS_PROMPT), HumanMessage(content=user_content)]
+    )
+    return _text(response)
+
+
+def brief_dataset(
+    model: Any, summary: dict[str, Any], highlights: list[dict[str, Any]]
+) -> str:
+    """Короткий связный абзац «Главное» — один вызов модели без инструментов.
+
+    Вызывается на старте. Без инструментов лимит запроса в 4096 токенов не
+    действует. Вызов необязателен: при сбое стартовый экран опирается на
+    детерминированные находки.
+    """
+    payload = (
+        "Сводка по датасету:\n"
+        + json.dumps(summary, ensure_ascii=False, default=str)
+        + "\n\nКлючевые находки:\n"
+        + json.dumps(highlights, ensure_ascii=False, default=str)
+    )
+    response = model.invoke(
+        [SystemMessage(content=_BRIEF_PROMPT), HumanMessage(content=payload)]
     )
     return _text(response)
