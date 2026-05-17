@@ -35,7 +35,17 @@ There is no test suite or linter configured.
 ## Architecture
 
 Startup pipeline (`analyzer/cli.py`): load JSON → SQLite → compute analytics →
-sync embeddings cache → print summary → REPL.
+sync embeddings cache → build agent → print summary + briefing → REPL.
+
+**Startup briefing** (`analytics.build_highlights`/`build_suggestions`,
+`agent.brief_dataset`). Below the deterministic summary the CLI prints a briefing
+so a cold-start user knows what to ask: a `ГЛАВНОЕ` paragraph (one no-tools LLM
+call over the summary + highlights — optional, its failure is non-fatal), a
+`На что посмотреть` block of deterministic top findings (the top `find_flags`
+row per kind), and numbered suggested questions templated from those same
+flagged rows so each one routes to an already-computed insight. Single-person
+datasets drop the comparative (rank/anomaly) questions. Typing `?` in the REPL
+reprints the questions.
 
 **Two stores, by design:**
 - **In-memory SQLite** (`sqlite_store.py`) — the recursive `child_metrics` tree is
@@ -86,6 +96,7 @@ question/answer pairs in history. Stage 2 binds no functions, so it gets the ful
 ## Module map (`analyzer/`)
 
 `loader` → flatten JSON · `sqlite_store` → SQLite schema + parameterized queries ·
-`analytics` → derived `metric_analytics` + startup summary · `embeddings` → GigaChat
-client · `pg_cache` → pgvector cache · `llm` → chat-model factory · `tools` → typed
-agent tools · `agent` → tool-calling agent · `cli` → REPL entry point.
+`analytics` → derived `metric_analytics` + startup summary/highlights/suggestions ·
+`embeddings` → GigaChat client · `pg_cache` → pgvector cache · `llm` → chat-model
+factory · `tools` → typed agent tools · `agent` → tool-calling agent + dataset
+briefing · `cli` → REPL entry point.
