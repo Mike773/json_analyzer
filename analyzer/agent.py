@@ -15,6 +15,7 @@ from typing import Any
 
 from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from langgraph.errors import GraphRecursionError
 
 from analyzer.llm import build_chat_model
 
@@ -51,9 +52,13 @@ _SYSTEM_PROMPT = """\
    метрикам, отсортированные по тяжести. Этого достаточно для обзора. НЕ перебирай
    метрики по одной через get_metric/describe_metric — уточняй точечно лишь то, что
    прямо названо в вопросе или попало в топ find_flags.
-7. Строго tools-only: ты не пишешь SQL. Если вопрос невозможно решить имеющимися
+7. Вопросы «почему» и «из чего состоит» (разложить метрику, разобрать по
+   компонентам, какая часть просела) решаются через metric_tree — он отдаёт
+   метрику вместе с её дочерними child_metrics. Не отвечай «таких данных нет»,
+   не вызвав metric_tree: состав метрики почти всегда есть в иерархии.
+8. Строго tools-only: ты не пишешь SQL. Если вопрос невозможно решить имеющимися
    инструментами — честно скажи об этом и предложи переформулировать.
-8. Не выдумывай числа: вызывай инструменты для каждого нужного факта. Не повторяй
+9. Не выдумывай числа: вызывай инструменты для каждого нужного факта. Не повторяй
    вызов с теми же аргументами и не зацикливайся — собрав достаточно данных,
    завершай сбор.
 
@@ -138,8 +143,11 @@ def _cap_tool_outputs(tools: list[Any]) -> None:
                 if isinstance(out, str) and len(out) > _TOOL_OUTPUT_CAP:
                     return (
                         out[:_TOOL_OUTPUT_CAP]
-                        + f"\n…[вывод усечён: {_TOOL_OUTPUT_CAP} из {len(out)} "
-                        "символов. Сузь запрос фильтрами metric/date/element/person.]"
+                        + f"\n…[длинная выдача обрезана: показаны первые "
+                        f"{_TOOL_OUTPUT_CAP} символов из {len(out)}. Это НЕ "
+                        "отсутствие данных — показанных строк (они идут в "
+                        "порядке значимости) достаточно для ответа; при "
+                        "необходимости уточни запрос фильтрами.]"
                     )
                 return out
 
@@ -155,6 +163,23 @@ def build_agent(tools: list[Any], overview: dict[str, Any]) -> Any:
     system_prompt = _SYSTEM_PROMPT + "\n\n" + _format_facts(overview)
     agent = create_agent(model=model, tools=tools, system_prompt=system_prompt)
     return agent.with_config({"recursion_limit": _RECURSION_LIMIT})
+
+
+def run_gather(agent: Any, messages: list[Any]) -> tuple[list[Any], bool]:
+    """Стадия 1 со стримингом: возвращает (сообщения, завершилось_штатно).
+
+    Цикл сбора прогоняется через stream, чтобы при упоре в лимит рекурсии
+    сохранить уже накопленные сообщения: ответ синтезируется даже из частичного
+    транскрипта, а не теряется вместе с GraphRecursionError.
+    """
+    last_messages: list[Any] = list(messages)
+    completed = True
+    try:
+        for state in agent.stream({"messages": messages}, stream_mode="values"):
+            last_messages = state.get("messages", last_messages)
+    except GraphRecursionError:
+        completed = False
+    return last_messages, completed
 
 
 def extract_tool_transcript(messages: list[Any]) -> tuple[str, int]:

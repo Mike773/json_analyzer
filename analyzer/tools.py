@@ -67,6 +67,24 @@ def _pack(result: dict[str, Any], curated: bool = True) -> str:
 def build_tools(store: SqliteStore, pg: PgCache) -> list[StructuredTool]:
     """Собирает набор инструментов, замкнутых на конкретные хранилища."""
 
+    def _unknown_metric(name: str) -> str | None:
+        """JSON-ошибка, если метрики с таким именем нет; иначе None.
+
+        Без этой проверки инструмент молча вернул бы пустой результат, и агент
+        мог зациклиться, повторяя неверный вызов (напр. ФИО в аргументе name).
+        """
+        if store.metric_type_of(name) is not None:
+            return None
+        return _dump(
+            {
+                "error": f"Метрика '{name}' не найдена. Аргумент name — это "
+                "название метрики, не человек и не продукт.",
+                "hint": "человека передавай в person, продукт — в element; "
+                "точное название метрики смотри в schema_overview или "
+                "resolve_entity(kind='metric').",
+            }
+        )
+
     def schema_overview() -> str:
         """Обзор загруженного датасета: метрики с их типами и единицами, значения
         element (продукты/разрезы), люди и диапазон дат. Семантику метрик не
@@ -116,6 +134,9 @@ def build_tools(store: SqliteStore, pg: PgCache) -> list[StructuredTool]:
         person — ФИО (или часть) либо табельный номер; date — неделя (YYYY-MM-DD).
         element НЕ указан = агрегат по метрике; чтобы получить конкретный
         продукт/разрез — задай element явно."""
+        unknown = _unknown_metric(name)
+        if unknown:
+            return unknown
         return _pack(store.get_metric(name, person=person, element=element, date=date))
 
     def compare(
@@ -127,6 +148,9 @@ def build_tools(store: SqliteStore, pg: PgCache) -> list[StructuredTool]:
         """Динамика метрики по неделям (поля wow_change_pct и trend) для одного
         человека. person ОБЯЗАТЕЛЕН. element не указан = агрегат. Чтобы найти, у
         кого сильнее всего спад/рост по всем сотрудникам, используй find_flags."""
+        unknown = _unknown_metric(name)
+        if unknown:
+            return unknown
         return _pack(store.compare(name, person=person, element=element, dates=dates))
 
     def rank(
@@ -138,6 +162,9 @@ def build_tools(store: SqliteStore, pg: PgCache) -> list[StructuredTool]:
         """Рейтинг сотрудников по метрике на конкретную неделю. Направление уже
         учтено: peer_rank=1 — лучший. element не указан = агрегат по сотруднику;
         post — фильтр по должности."""
+        unknown = _unknown_metric(name)
+        if unknown:
+            return unknown
         return _pack(store.rank(name, date, element=element, post=post))
 
     def aggregate(
@@ -148,6 +175,9 @@ def build_tools(store: SqliteStore, pg: PgCache) -> list[StructuredTool]:
     ) -> str:
         """Агрегация значений метрики (avg/min/max/sum/count) по группам.
         group_by: 'person' | 'element' | 'date' | 'post'."""
+        unknown = _unknown_metric(name)
+        if unknown:
+            return unknown
         result = store.aggregate(name, group_by, date=date, element=element)
         if "groups" in result:
             result = dict(result)
@@ -162,6 +192,10 @@ def build_tools(store: SqliteStore, pg: PgCache) -> list[StructuredTool]:
         """Иерархия метрик: метрика name (или метрики верхнего уровня) со всеми
         дочерними child_metrics. Используй для разбора состава метрики. Лучше
         задавать person и date, иначе строк много."""
+        if name is not None:
+            unknown = _unknown_metric(name)
+            if unknown:
+                return unknown
         return _pack(store.metric_tree(name=name, person=person, date=date), curated=False)
 
     def list_people(

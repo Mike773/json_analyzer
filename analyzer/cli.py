@@ -13,7 +13,7 @@ from typing import Any
 
 from config import settings
 
-from analyzer.agent import build_agent, synthesize_answer
+from analyzer.agent import build_agent, run_gather, synthesize_answer
 from analyzer.analytics import build_summary, compute_analytics
 from analyzer.llm import build_chat_model
 from analyzer.loader import load_dataset
@@ -128,14 +128,19 @@ def main() -> int:
             break
         try:
             # Стадия 1: агент собирает данные инструментами.
-            result = agent.invoke(
-                {"messages": history + [HumanMessage(content=question)]}
+            gathered, completed = run_gather(
+                agent, history + [HumanMessage(content=question)]
             )
             # Стадия 2: финальный ответ из собранных данных без инструментов.
-            answer = synthesize_answer(synth_model, question, result["messages"])
+            answer = synthesize_answer(synth_model, question, gathered)
         except Exception as exc:
             print(f"Ошибка агента: {exc}")
             continue
+        if not completed:
+            answer += (
+                "\n\n(Примечание: агент не уложился в лимит шагов сбора — "
+                "ответ собран по тем данным, что успели получить.)"
+            )
         print(f"\n{answer}")
         history += [HumanMessage(content=question), AIMessage(content=answer)]
         history = history[-8:]
