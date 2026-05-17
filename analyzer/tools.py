@@ -61,6 +61,16 @@ def _pack(result: dict[str, Any], curated: bool = True) -> str:
     packed = {k: v for k, v in result.items() if k != "rows"}
     transform = _compact_row if curated else _strip
     packed["rows"] = [transform(r) for r in result.get("rows", [])]
+    if packed.pop("truncated", False):
+        # Выборка усечена по лимиту строк. Голый count здесь равен лимиту
+        # пагинации — модель путала его с «числом случаев». Заменяем явной
+        # пометкой, чтобы это нельзя было принять за итоговый счёт.
+        shown = packed.pop("count", len(packed["rows"]))
+        packed["выборка"] = (
+            f"показаны первые {shown} строк (самые значимые); в данных есть и "
+            "другие — это НЕ полное число случаев. Чтобы охватить остальное, "
+            "сузь запрос фильтрами metric/date/element."
+        )
     return _dump(packed)
 
 
@@ -83,6 +93,35 @@ def build_tools(store: SqliteStore, pg: PgCache) -> list[StructuredTool]:
                 "точные названия метрик смотри в schema_overview или подбери "
                 "через resolve_entity(kind='metric'). Если фильтр по метрике не "
                 "нужен — просто не передавай этот аргумент.",
+            }
+        )
+
+    def _unknown_person(person: str | None) -> str | None:
+        """JSON-ошибка, если человека с таким ФИО/табномером нет; иначе None.
+
+        person не задан — фильтра нет, проверка не нужна. Ловит мусор и
+        несуществующих людей (частая ошибка модели) до выполнения запроса,
+        чтобы инструмент не возвращал молча пустой результат.
+        """
+        if person is None or str(person).strip() == "":
+            return None
+        text = str(person).strip()
+        people = store.list_people()
+        if text.isdigit():
+            found = any(str(p["person_tabnum"]) == text for p in people)
+        else:
+            needle = text.lower()
+            found = any(needle in (p["person_fio"] or "").lower() for p in people)
+        if found:
+            return None
+        return _dump(
+            {
+                "error": f"Человек '{person}' не найден. Здесь нужно ТОЧНОЕ ФИО "
+                "(или его часть) либо табельный номер сотрудника — не метрика, "
+                "не продукт, не произвольный текст.",
+                "hint": "список людей смотри в list_people, неточное имя "
+                "разрешай через resolve_entity(kind='person'). Если фильтр по "
+                "человеку не нужен — просто не передавай аргумент person.",
             }
         )
 
@@ -135,7 +174,7 @@ def build_tools(store: SqliteStore, pg: PgCache) -> list[StructuredTool]:
         person — ФИО (или часть) либо табельный номер; date — неделя (YYYY-MM-DD).
         element НЕ указан = агрегат по метрике; чтобы получить конкретный
         продукт/разрез — задай element явно."""
-        unknown = _unknown_metric(metric)
+        unknown = _unknown_metric(metric) or _unknown_person(person)
         if unknown:
             return unknown
         return _pack(store.get_metric(metric, person=person, element=element, date=date))
@@ -149,7 +188,7 @@ def build_tools(store: SqliteStore, pg: PgCache) -> list[StructuredTool]:
         """Динамика метрики по неделям (поля wow_change_pct и trend) для одного
         человека. person ОБЯЗАТЕЛЕН. element не указан = агрегат. Чтобы найти, у
         кого сильнее всего спад/рост по всем сотрудникам, используй find_flags."""
-        unknown = _unknown_metric(metric)
+        unknown = _unknown_metric(metric) or _unknown_person(person)
         if unknown:
             return unknown
         return _pack(store.compare(metric, person=person, element=element, dates=dates))
@@ -197,10 +236,11 @@ def build_tools(store: SqliteStore, pg: PgCache) -> list[StructuredTool]:
         отклонениями — не нужно дёргать get_metric по каждому компоненту. Для
         разбора состава метрики задавай metric и person (и date — иначе строк
         много)."""
-        if metric is not None:
-            unknown = _unknown_metric(metric)
-            if unknown:
-                return unknown
+        unknown = (
+            _unknown_metric(metric) if metric is not None else None
+        ) or _unknown_person(person)
+        if unknown:
+            return unknown
         return _pack(
             store.metric_tree(name=metric, person=person, date=date), curated=False
         )
