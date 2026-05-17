@@ -23,7 +23,21 @@ from analyzer.llm import build_chat_model
 # Чтобы контекст не перерос окно модели, выдача каждого инструмента усекается,
 # а число шагов цикла ограничено.
 _TOOL_OUTPUT_CAP = 6000
-_RECURSION_LIMIT = 30
+_RECURSION_LIMIT = 50
+
+# Идентичные повторные вызовы инструментов в одном цикле сбора — типичный
+# признак зацикливания модели; такой вызов не выполняется заново. Множество
+# сбрасывается в начале каждого run_gather.
+_SEEN_CALLS: set[str] = set()
+
+# Ответ на повторный вызов и порог, после которого цикл сбора принудительно
+# завершается: модель зациклилась и не реагирует на эту заглушку.
+_REPEAT_NOTICE = (
+    "Этот инструмент уже вызывался с такими же аргументами — его результат "
+    "есть выше. НЕ повторяй вызов: используй уже собранные данные или заверши "
+    "сбор."
+)
+_MAX_REPEAT_BLOCKS = 3
 
 _SYSTEM_PROMPT = """\
 Ты — универсальный агент-аналитик метрик. Данные о метриках и людях доступны тебе
@@ -46,21 +60,26 @@ _SYSTEM_PROMPT = """\
 5. Производная аналитика уже посчитана — пользуйся полями результатов
    (plan_status, benchmark_status, wow_change_*, trend, peer_rank, is_anomaly)
    и инструментом find_flags. Не пересчитывай то, что уже готово.
-6. Широкие вопросы (общее состояние, «проблемные метрики», слабые/сильные
-   стороны, итоговая оценка) решаются двумя вызовами find_flags — kind='below_plan'
-   и kind='trend' БЕЗ аргумента metric: они сразу возвращают худшие строки по всем
-   метрикам, отсортированные по тяжести. Этого достаточно для обзора. НЕ перебирай
-   метрики по одной через get_metric/describe_metric — уточняй точечно лишь то, что
-   прямо названо в вопросе или попало в топ find_flags.
-7. Вопросы «почему» и «из чего состоит» (разложить метрику, разобрать по
-   компонентам, какая часть просела) решаются через metric_tree — он отдаёт
-   метрику вместе с её дочерними child_metrics. Не отвечай «таких данных нет»,
-   не вызвав metric_tree: состав метрики почти всегда есть в иерархии.
+6. Широкие вопросы (общее состояние, «проблемные метрики», сильные стороны,
+   итоговая оценка) решаются вызовами find_flags БЕЗ аргумента metric:
+   kind='below_plan' — проблемные места, kind='above_plan' — сильные стороны,
+   kind='trend' — динамика. Каждый сразу возвращает нужные строки по всем
+   метрикам, отсортированные по силе. Этого достаточно — НЕ перебирай метрики по
+   одной через get_metric/describe_metric.
+7. «Почему» и «из чего состоит» (разложить метрику на компоненты, какая часть
+   просела) — это ОДИН вызов metric_tree(name=<метрика>, person=<человек>,
+   date=<неделя>): он возвращает метрику и все дочерние компоненты сразу, с
+   аналитикой по каждому (отклонения от плана и бенчмарка, тренд). НЕ дёргай
+   get_metric/describe_metric по компонентам — всё уже в дереве. Состав метрики
+   почти всегда есть в иерархии: не отвечай «таких данных нет», не вызвав
+   metric_tree.
 8. Строго tools-only: ты не пишешь SQL. Если вопрос невозможно решить имеющимися
    инструментами — честно скажи об этом и предложи переформулировать.
-9. Не выдумывай числа: вызывай инструменты для каждого нужного факта. Не повторяй
-   вызов с теми же аргументами и не зацикливайся — собрав достаточно данных,
-   завершай сбор.
+9. Не выдумывай числа: вызывай инструмент для каждого нужного факта. Собирай
+   ТОЛЬКО то, что относится к вопросу — не тяни метрики, которых вопрос не
+   касается. describe_metric нужен, лишь когда требуется смысл/определение
+   метрики, а не для каждой метрики подряд. Не повторяй вызов с теми же
+   аргументами; собрав достаточно данных — завершай сбор.
 
 Собери все данные, необходимые для полного ответа на вопрос пользователя.
 """
@@ -97,6 +116,22 @@ def _format_facts(overview: dict[str, Any]) -> str:
     elements = overview.get("elements") or []
     managers = sum(1 for p in people if p.get("person_is_me"))
 
+    if len(people) == 1:
+        only = people[0]
+        post = only.get("person_post") or "должность не указана"
+        people_line = (
+            f"- В датасете ОДИН человек: {only['person_fio']} ({post}). Любой "
+            "вопрос про «этого сотрудника», «него», «её», «оператора» относится "
+            f"к нему — сразу подставляй ФИО '{only['person_fio']}' в аргумент "
+            "person. НЕ переспрашивай у пользователя имя."
+        )
+    else:
+        people_line = (
+            f"- Людей: {len(people)} ({managers} рук. + {len(people) - managers} "
+            "сотр.). Человека по неточному имени ищи через resolve_entity или "
+            "list_people."
+        )
+
     lines = [
         "СОСТАВ ЗАГРУЖЕННОГО ДАТАСЕТА (используй эти точные значения в аргументах):",
         f"- Периоды по порядку ('первая неделя' = первый): {', '.join(dates)}",
@@ -104,8 +139,7 @@ def _format_facts(overview: dict[str, Any]) -> str:
         f"- Должности: {', '.join(posts)}",
         f"- Подразделения: {', '.join(departs)}",
         f"- Значения element (продукты/разрезы): {', '.join(elements)}",
-        f"- Людей: {len(people)} ({managers} рук. + {len(people) - managers} сотр.). "
-        "Человека по неточному имени ищи через resolve_entity или list_people.",
+        people_line,
     ]
     return "\n".join(lines)
 
@@ -126,19 +160,25 @@ def _text(msg: Any) -> str:
     return str(content)
 
 
-def _cap_tool_outputs(tools: list[Any]) -> None:
-    """Усекает выдачу каждого инструмента до _TOOL_OUTPUT_CAP символов.
+def _guard_tools(tools: list[Any]) -> None:
+    """Оборачивает инструменты: усечение выдачи + защита от повторных вызовов.
 
-    Цикл сбора накапливает результаты всех вызовов в одном контексте; без
-    ограничения один «жадный» вызов или их серия переполняют окно модели.
+    Цикл сбора накапливает результаты всех вызовов в одном контексте — без
+    усечения «жадный» вызов переполняет окно модели. А идентичный повторный
+    вызов (частый признак зацикливания модели) не выполняется заново: вместо
+    результата возвращается подсказка завершить сбор.
     """
     for tool in tools:
         original = tool.func
         if original is None:
             continue
 
-        def _wrap(orig: Any) -> Any:
-            def capped(*args: Any, **kwargs: Any) -> Any:
+        def _wrap(orig: Any, name: str) -> Any:
+            def guarded(*args: Any, **kwargs: Any) -> Any:
+                key = f"{name}|{args!r}|{sorted(kwargs.items())!r}"
+                if key in _SEEN_CALLS:
+                    return _REPEAT_NOTICE
+                _SEEN_CALLS.add(key)
                 out = orig(*args, **kwargs)
                 if isinstance(out, str) and len(out) > _TOOL_OUTPUT_CAP:
                     return (
@@ -151,15 +191,15 @@ def _cap_tool_outputs(tools: list[Any]) -> None:
                     )
                 return out
 
-            return capped
+            return guarded
 
-        tool.func = _wrap(original)
+        tool.func = _wrap(original, tool.name)
 
 
 def build_agent(tools: list[Any], overview: dict[str, Any]) -> Any:
     """Стадия 1: агент сбора данных поверх чат-модели и инструментов."""
     model = build_chat_model()
-    _cap_tool_outputs(tools)
+    _guard_tools(tools)
     system_prompt = _SYSTEM_PROMPT + "\n\n" + _format_facts(overview)
     agent = create_agent(model=model, tools=tools, system_prompt=system_prompt)
     return agent.with_config({"recursion_limit": _RECURSION_LIMIT})
@@ -172,11 +212,22 @@ def run_gather(agent: Any, messages: list[Any]) -> tuple[list[Any], bool]:
     сохранить уже накопленные сообщения: ответ синтезируется даже из частичного
     транскрипта, а не теряется вместе с GraphRecursionError.
     """
+    _SEEN_CALLS.clear()
     last_messages: list[Any] = list(messages)
     completed = True
     try:
         for state in agent.stream({"messages": messages}, stream_mode="values"):
             last_messages = state.get("messages", last_messages)
+            repeats = sum(
+                1
+                for m in last_messages
+                if isinstance(m, ToolMessage) and _REPEAT_NOTICE in _text(m)
+            )
+            if repeats >= _MAX_REPEAT_BLOCKS:
+                # Модель зациклилась на повторных вызовах. Нужные данные уже
+                # собраны более ранними вызовами — обрываем пустой цикл и идём
+                # к синтезу (это не потеря данных, поэтому completed=True).
+                break
     except GraphRecursionError:
         completed = False
     return last_messages, completed

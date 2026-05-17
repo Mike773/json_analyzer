@@ -408,7 +408,12 @@ class SqliteStore:
         limit: int = 80,
     ) -> dict[str, Any]:
         """Поддерево метрик: корни (или метрика name) и все их потомки."""
-        root_where = "depth = 1" if name is None else "metric_name = ?"
+        # При заданной метрике корнем берётся агрегат (element IS NULL): состав
+        # метрики — это её child_metrics, а не разрезы по element. Рекурсия ниже
+        # подтянет всех потомков независимо от element.
+        root_where = (
+            "depth = 1" if name is None else "metric_name = ? AND element IS NULL"
+        )
         root_params: list[Any] = [] if name is None else [name]
         pc, pp = self._person_clause(person)
         root_where += pc.replace("m.", "")
@@ -425,8 +430,11 @@ class SqliteStore:
             ") "
             "SELECT m.metric_uid, m.parent_uid, m.depth, m.person_fio, "
             "m.metric_name, m.metric_type, m.measure_type, m.date, m.element, "
-            "m.fact, m.plan, m.benchmark, m.influent_percent "
+            "m.fact, m.plan, m.benchmark, m.influent_percent, "
+            "a.plan_status, a.plan_dev_pct, a.benchmark_status, "
+            "a.benchmark_dev_pct, a.trend, a.wow_change_pct "
             "FROM metrics m JOIN tree t ON m.metric_uid = t.metric_uid "
+            "LEFT JOIN metric_analytics a ON a.metric_uid = m.metric_uid "
             "ORDER BY m.person_fio, m.depth, m.metric_uid LIMIT ?"
         )
         rows = self._rows(self.conn.execute(sql, [*root_params, limit + 1]))
@@ -446,7 +454,7 @@ class SqliteStore:
     ) -> dict[str, Any]:
         """Выборка предрассчитанных флагов из metric_analytics.
 
-        kind: 'anomaly' | 'below_plan' | 'trend'.
+        kind: 'anomaly' | 'below_plan' | 'above_plan' | 'trend'.
         """
         where = "1 = 1"
         params: list[Any] = []
@@ -454,11 +462,14 @@ class SqliteStore:
             where += " AND a.is_anomaly = 1"
         elif kind == "below_plan":
             where += " AND a.plan_status = 'хуже_плана'"
+        elif kind == "above_plan":
+            where += " AND a.plan_status = 'лучше_плана'"
         elif kind == "trend":
             where += " AND a.trend IN ('рост', 'падение')"
         else:
             return {
-                "error": "kind должен быть 'anomaly', 'below_plan' или 'trend'",
+                "error": "kind должен быть 'anomaly', 'below_plan', "
+                "'above_plan' или 'trend'",
                 "rows": [],
             }
         if date:
@@ -474,6 +485,7 @@ class SqliteStore:
         order = {
             "anomaly": "ABS(a.zscore) DESC",
             "below_plan": "(a.plan_dev_pct IS NULL), ABS(a.plan_dev_pct) DESC",
+            "above_plan": "(a.plan_dev_pct IS NULL), ABS(a.plan_dev_pct) DESC",
             "trend": "(a.wow_change_pct IS NULL), a.wow_change_pct ASC",
         }[kind]
         return self._select_metrics(where, params, order=order, limit=limit)

@@ -67,21 +67,22 @@ def _pack(result: dict[str, Any], curated: bool = True) -> str:
 def build_tools(store: SqliteStore, pg: PgCache) -> list[StructuredTool]:
     """Собирает набор инструментов, замкнутых на конкретные хранилища."""
 
-    def _unknown_metric(name: str) -> str | None:
+    def _unknown_metric(metric: str) -> str | None:
         """JSON-ошибка, если метрики с таким именем нет; иначе None.
 
         Без этой проверки инструмент молча вернул бы пустой результат, и агент
-        мог зациклиться, повторяя неверный вызов (напр. ФИО в аргументе name).
+        мог зациклиться, повторяя неверный вызов (ФИО или мусор вместо метрики).
         """
-        if store.metric_type_of(name) is not None:
+        if store.metric_type_of(metric) is not None:
             return None
         return _dump(
             {
-                "error": f"Метрика '{name}' не найдена. Аргумент name — это "
-                "название метрики, не человек и не продукт.",
+                "error": f"Метрика '{metric}' не найдена. Здесь нужно ТОЧНОЕ "
+                "название метрики — не человек, не продукт, не произвольный текст.",
                 "hint": "человека передавай в person, продукт — в element; "
-                "точное название метрики смотри в schema_overview или "
-                "resolve_entity(kind='metric').",
+                "точные названия метрик смотри в schema_overview или подбери "
+                "через resolve_entity(kind='metric'). Если фильтр по метрике не "
+                "нужен — просто не передавай этот аргумент.",
             }
         )
 
@@ -112,19 +113,19 @@ def build_tools(store: SqliteStore, pg: PgCache) -> list[StructuredTool]:
             {"kind": kind, "matches": pg.search(vector, kinds=search_kinds, top_k=5)}
         )
 
-    def describe_metric(name: str) -> str:
+    def describe_metric(metric: str) -> str:
         """Описание метрики, её тип ('прямая' — чем больше, тем лучше; 'обратная' —
         чем меньше, тем лучше), единица измерения и период расчёта. Вызывай перед
         интерпретацией значений: направление метрики критично."""
-        result = store.describe_metric(name)
+        result = store.describe_metric(metric)
         if result is None:
             return _dump(
-                {"error": f"Метрика '{name}' не найдена", "hint": "используй resolve_entity"}
+                {"error": f"Метрика '{metric}' не найдена", "hint": "используй resolve_entity"}
             )
         return _dump(result)
 
     def get_metric(
-        name: str,
+        metric: str,
         person: str | None = None,
         element: str | None = None,
         date: str | None = None,
@@ -134,13 +135,13 @@ def build_tools(store: SqliteStore, pg: PgCache) -> list[StructuredTool]:
         person — ФИО (или часть) либо табельный номер; date — неделя (YYYY-MM-DD).
         element НЕ указан = агрегат по метрике; чтобы получить конкретный
         продукт/разрез — задай element явно."""
-        unknown = _unknown_metric(name)
+        unknown = _unknown_metric(metric)
         if unknown:
             return unknown
-        return _pack(store.get_metric(name, person=person, element=element, date=date))
+        return _pack(store.get_metric(metric, person=person, element=element, date=date))
 
     def compare(
-        name: str,
+        metric: str,
         person: str | None = None,
         element: str | None = None,
         dates: list[str] | None = None,
@@ -148,13 +149,13 @@ def build_tools(store: SqliteStore, pg: PgCache) -> list[StructuredTool]:
         """Динамика метрики по неделям (поля wow_change_pct и trend) для одного
         человека. person ОБЯЗАТЕЛЕН. element не указан = агрегат. Чтобы найти, у
         кого сильнее всего спад/рост по всем сотрудникам, используй find_flags."""
-        unknown = _unknown_metric(name)
+        unknown = _unknown_metric(metric)
         if unknown:
             return unknown
-        return _pack(store.compare(name, person=person, element=element, dates=dates))
+        return _pack(store.compare(metric, person=person, element=element, dates=dates))
 
     def rank(
-        name: str,
+        metric: str,
         date: str,
         element: str | None = None,
         post: str | None = None,
@@ -162,41 +163,47 @@ def build_tools(store: SqliteStore, pg: PgCache) -> list[StructuredTool]:
         """Рейтинг сотрудников по метрике на конкретную неделю. Направление уже
         учтено: peer_rank=1 — лучший. element не указан = агрегат по сотруднику;
         post — фильтр по должности."""
-        unknown = _unknown_metric(name)
+        unknown = _unknown_metric(metric)
         if unknown:
             return unknown
-        return _pack(store.rank(name, date, element=element, post=post))
+        return _pack(store.rank(metric, date, element=element, post=post))
 
     def aggregate(
-        name: str,
+        metric: str,
         group_by: str,
         date: str | None = None,
         element: str | None = None,
     ) -> str:
         """Агрегация значений метрики (avg/min/max/sum/count) по группам.
         group_by: 'person' | 'element' | 'date' | 'post'."""
-        unknown = _unknown_metric(name)
+        unknown = _unknown_metric(metric)
         if unknown:
             return unknown
-        result = store.aggregate(name, group_by, date=date, element=element)
+        result = store.aggregate(metric, group_by, date=date, element=element)
         if "groups" in result:
             result = dict(result)
             result["groups"] = [_strip(g) for g in result["groups"]]
         return _dump(result)
 
     def metric_tree(
-        name: str | None = None,
+        metric: str | None = None,
         person: str | None = None,
         date: str | None = None,
     ) -> str:
-        """Иерархия метрик: метрика name (или метрики верхнего уровня) со всеми
-        дочерними child_metrics. Используй для разбора состава метрики. Лучше
-        задавать person и date, иначе строк много."""
-        if name is not None:
-            unknown = _unknown_metric(name)
+        """Иерархия метрик: метрика metric (или метрики верхнего уровня) со всеми
+        дочерними child_metrics И аналитикой по каждому узлу (plan_status,
+        plan_dev_pct, benchmark_status, benchmark_dev_pct, trend, wow_change_pct,
+        influent_percent). ОДИН вызов раскладывает метрику на компоненты со всеми
+        отклонениями — не нужно дёргать get_metric по каждому компоненту. Для
+        разбора состава метрики задавай metric и person (и date — иначе строк
+        много)."""
+        if metric is not None:
+            unknown = _unknown_metric(metric)
             if unknown:
                 return unknown
-        return _pack(store.metric_tree(name=name, person=person, date=date), curated=False)
+        return _pack(
+            store.metric_tree(name=metric, person=person, date=date), curated=False
+        )
 
     def list_people(
         role: str | None = None,
@@ -223,10 +230,15 @@ def build_tools(store: SqliteStore, pg: PgCache) -> list[StructuredTool]:
         """Выборка предрассчитанных проблемных/заметных строк, ОТСОРТИРОВАННАЯ по
         силе: первая строка — самая значимая.
         kind: 'anomaly' — статистические выбросы (|z-score| выше порога);
-        'below_plan' — факт хуже плана с учётом направления метрики;
-        'trend' — кто сильнее всего просел или вырос в динамике (первая строка —
-        самый сильный спад). Чтобы сфокусировать выдачу, задавай metric (и date).
-        Фильтры date/metric/element опциональны."""
+        'below_plan' — факт хуже плана с учётом направления метрики (проблемные
+        места); 'above_plan' — факт лучше плана (сильные стороны), первая строка —
+        самое сильное перевыполнение; 'trend' — кто сильнее всего просел или вырос
+        в динамике (первая строка — самый сильный спад). Чтобы сфокусировать
+        выдачу, задавай metric (и date). Фильтры date/metric/element опциональны."""
+        # metric — необязательный фильтр; модель иногда присылает сюда мусор.
+        # Неизвестное значение игнорируем и отдаём общий скан, а не пустоту.
+        if metric and store.metric_type_of(metric) is None:
+            metric = None
         return _pack(store.find_flags(kind, date=date, metric=metric, element=element))
 
     def analytics_summary() -> str:
