@@ -229,7 +229,9 @@ def _anchor(qid: str, store: SqliteStore, snap: dict[str, Any], emp: str | None)
     return None
 
 
-def _run_dataset(name: str, path: str, kind: str, pg: PgCache, limit: int) -> int:
+def _run_dataset(
+    name: str, path: str, kind: str, pg: PgCache, limit: int, qfilter: set[str]
+) -> int:
     print(f"\n=== {name} ({path}) ===", flush=True)
     store = SqliteStore()
     store.load(load_dataset(path))
@@ -250,7 +252,9 @@ def _run_dataset(name: str, path: str, kind: str, pg: PgCache, limit: int) -> in
     synth = build_chat_model()
 
     qset = _QSETS[kind]
-    if limit:
+    if qfilter:
+        qset = [(qid, t) for qid, t in qset if qid in qfilter]
+    elif limit:
         qset = qset[:limit]
 
     cells: list[dict[str, Any]] = []
@@ -311,6 +315,12 @@ def main() -> int:
     parser.add_argument(
         "--limit", type=int, default=0, help="первые N вопросов на датасет (0 = все)"
     )
+    parser.add_argument(
+        "--questions", default="", help="фильтр id вопросов через запятую (напр. E3,M5)"
+    )
+    parser.add_argument(
+        "--out", default="eval_out", help="каталог для дампов прогона"
+    )
     args = parser.parse_args()
 
     try:
@@ -325,9 +335,16 @@ def main() -> int:
         print(f"Неизвестные датасеты: {unknown}. Доступно: {list(_DATASETS)}")
         return 1
 
-    _OUT.mkdir(exist_ok=True)
+    global _OUT
+    _OUT = Path(args.out)
+    _OUT.mkdir(parents=True, exist_ok=True)
+    qfilter = {q.strip().upper() for q in args.questions.split(",") if q.strip()}
     print(f"Чат-провайдер: {settings.llm_provider} (модель: {settings.llm_model})")
-    print(f"Датасеты: {names}; вопросов на датасет: {args.limit or 'все'}")
+    print(
+        f"Датасеты: {names}; "
+        f"вопросы: {sorted(qfilter) if qfilter else (args.limit or 'все')}; "
+        f"вывод: {_OUT}/"
+    )
 
     try:
         dim = len(embeddings.embed_query("проба размерности"))
@@ -342,7 +359,7 @@ def main() -> int:
     try:
         for name in names:
             path, kind = _DATASETS[name]
-            total += _run_dataset(name, path, kind, pg, args.limit)
+            total += _run_dataset(name, path, kind, pg, args.limit, qfilter)
     finally:
         pg.close()
 
