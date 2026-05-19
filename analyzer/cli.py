@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-import sys
+import argparse
 from typing import Any
 
 from config import settings
@@ -16,6 +16,7 @@ from config import settings
 from analyzer.agent import (
     brief_dataset,
     build_agent,
+    render_agent_graph,
     run_gather,
     synthesize_answer,
 )
@@ -126,7 +127,30 @@ def main() -> int:
         print(f"Ошибка конфигурации: {exc}")
         return 1
 
-    path = sys.argv[1] if len(sys.argv) > 1 else settings.default_dataset
+    parser = argparse.ArgumentParser(
+        prog="analyzer.cli",
+        description="Интерактивный CLI-чат агента-аналитика метрик.",
+    )
+    parser.add_argument(
+        "path",
+        nargs="?",
+        default=settings.default_dataset,
+        help="путь к JSON-датасету (по умолчанию: %(default)s)",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="печатать шаги выполнения агента (вызовы инструментов и результаты)",
+    )
+    parser.add_argument(
+        "--graph",
+        action="store_true",
+        help="напечатать граф агента (Mermaid) при запуске",
+    )
+    args = parser.parse_args()
+    path = args.path
+
     print(f"Чат-провайдер: {settings.llm_provider} (модель: {settings.llm_model})")
     print(f"Датасет: {path}")
 
@@ -169,6 +193,12 @@ def main() -> int:
         pg.close()
         return 1
 
+    if args.graph:
+        line = "=" * 64
+        print(f"\n{line}\nГРАФ АГЕНТА (Mermaid)\n{line}")
+        print(render_agent_graph(agent))
+        print(line)
+
     summary = build_summary(store)
     _print_summary(summary)
 
@@ -206,7 +236,9 @@ def main() -> int:
         try:
             # Стадия 1: агент собирает данные инструментами.
             gathered, completed = run_gather(
-                agent, history + [HumanMessage(content=question)]
+                agent,
+                history + [HumanMessage(content=question)],
+                verbose=args.verbose,
             )
             # Стадия 2: финальный ответ из собранных данных без инструментов.
             answer = synthesize_answer(synth_model, question, gathered)

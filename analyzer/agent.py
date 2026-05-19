@@ -271,20 +271,54 @@ def build_agent(tools: list[Any], overview: dict[str, Any]) -> Any:
     return agent.with_config({"recursion_limit": _RECURSION_LIMIT})
 
 
-def run_gather(agent: Any, messages: list[Any]) -> tuple[list[Any], bool]:
+def render_agent_graph(agent: Any) -> str:
+    """Текстовое представление графа агента (Mermaid).
+
+    `create_agent` возвращает скомпилированный граф LangGraph, поэтому его
+    структура доступна через get_graph(). Mermaid выбран как формат без доп.
+    зависимостей (draw_ascii() потребовал бы пакет grandalf).
+    """
+    return agent.get_graph().draw_mermaid()
+
+
+def _print_step(msg: Any) -> None:
+    """Печатает один шаг стадии 1: вызовы инструментов и/или их результат."""
+    for call in getattr(msg, "tool_calls", None) or []:
+        args = ", ".join(
+            f"{k}={v!r}" for k, v in (call.get("args") or {}).items()
+        )
+        print(f"  → {call.get('name')}({args})")
+    if isinstance(msg, ToolMessage):
+        result = " ".join(_text(msg).split())
+        if len(result) > 500:
+            result = result[:500] + " …"
+        print(f"  ← {result}")
+
+
+def run_gather(
+    agent: Any, messages: list[Any], verbose: bool = False
+) -> tuple[list[Any], bool]:
     """Стадия 1 со стримингом: возвращает (сообщения, завершилось_штатно).
 
     Цикл сбора прогоняется через stream, чтобы при упоре в лимит рекурсии
     сохранить уже накопленные сообщения: ответ синтезируется даже из частичного
     транскрипта, а не теряется вместе с GraphRecursionError.
+
+    При verbose=True каждый новый шаг (вызов инструмента и его результат)
+    печатается по мере поступления из стрима.
     """
     _SEEN_CALLS.clear()
     _CALL_COUNT[0] = 0
     last_messages: list[Any] = list(messages)
     completed = True
+    printed = len(messages)
     try:
         for state in agent.stream({"messages": messages}, stream_mode="values"):
             last_messages = state.get("messages", last_messages)
+            if verbose:
+                for msg in last_messages[printed:]:
+                    _print_step(msg)
+                printed = len(last_messages)
             stop_notices = sum(
                 1
                 for m in last_messages
