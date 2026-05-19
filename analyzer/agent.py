@@ -15,7 +15,12 @@ import json
 from typing import Any
 
 from langchain.agents import create_agent
-from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langgraph.errors import GraphRecursionError
 
 from analyzer.llm import build_chat_model
@@ -282,7 +287,22 @@ def render_agent_graph(agent: Any) -> str:
 
 
 def _print_step(msg: Any) -> None:
-    """Печатает один шаг стадии 1: вызовы инструментов и/или их результат."""
+    """Печатает один шаг стадии 1: мотивацию модели, вызовы инструментов, результат.
+
+    Текст рядом с вызовом инструмента — единственный источник «почему» модель его
+    выбрала: отдельного reasoning-канала у gpt-4o / GigaChat нет, но провайдер
+    может положить рассуждение в additional_kwargs.
+    """
+    if isinstance(msg, AIMessage):
+        reasoning = _text(msg).strip()
+        kwargs = msg.additional_kwargs or {}
+        for key in ("reasoning_content", "reasoning"):
+            extra = kwargs.get(key)
+            if extra:
+                reasoning = (f"{str(extra).strip()}\n{reasoning}").strip()
+        for ln in reasoning.splitlines():
+            if ln.strip():
+                print(f"  · {ln.strip()}")
     for call in getattr(msg, "tool_calls", None) or []:
         args = ", ".join(
             f"{k}={v!r}" for k, v in (call.get("args") or {}).items()
@@ -304,14 +324,16 @@ def run_gather(
     сохранить уже накопленные сообщения: ответ синтезируется даже из частичного
     транскрипта, а не теряется вместе с GraphRecursionError.
 
-    При verbose=True каждый новый шаг (вызов инструмента и его результат)
-    печатается по мере поступления из стрима.
+    При verbose=True каждый новый шаг (мотивация модели, вызов инструмента и его
+    результат) печатается по мере поступления из стрима.
     """
     _SEEN_CALLS.clear()
     _CALL_COUNT[0] = 0
     last_messages: list[Any] = list(messages)
     completed = True
     printed = len(messages)
+    if verbose:
+        print()
     try:
         for state in agent.stream({"messages": messages}, stream_mode="values"):
             last_messages = state.get("messages", last_messages)
