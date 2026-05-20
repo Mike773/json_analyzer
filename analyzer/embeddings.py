@@ -16,12 +16,16 @@ def get_embeddings() -> Any:
     """Ленивая инициализация клиента GigaChatEmbeddings (один на процесс)."""
     from langchain_gigachat import GigaChatEmbeddings
 
-    return GigaChatEmbeddings(
-        credentials=settings.gigachat_credentials,
-        scope=settings.gigachat_scope,
-        model=settings.gigachat_embeddings_model,
-        verify_ssl_certs=settings.gigachat_verify_ssl,
-    )
+    kwargs: dict[str, Any] = {
+        "model": settings.gigachat_embeddings_model,
+        "verify_ssl_certs": settings.gigachat_verify_ssl,
+    }
+    if settings.gigachat_credentials:
+        kwargs["credentials"] = settings.gigachat_credentials
+        kwargs["scope"] = settings.gigachat_scope
+    if settings.gigachat_base_url:
+        kwargs["base_url"] = settings.gigachat_base_url
+    return GigaChatEmbeddings(**kwargs)
 
 
 def embed_documents(texts: list[str]) -> list[list[float]]:
