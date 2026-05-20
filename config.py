@@ -31,8 +31,12 @@ class Settings:
     gigachat_scope: str
     gigachat_verify_ssl: bool
     gigachat_embeddings_model: str
+    # Кастомный API-эндпоинт GigaChat-совместимого шлюза. Пусто => дефолт библиотеки.
+    gigachat_base_url: str
     # PostgreSQL с расширением pgvector.
     postgres_dsn: str
+    # Схема для кэша metric_embeddings. Пусто => search_path не трогается.
+    postgres_schema: str
     # Порог |z-score| для пометки строки метрики как аномалии.
     anomaly_zscore_threshold: float
     # Размерность вектора эмбеддингов (фиксируется под модель GigaChat).
@@ -47,13 +51,16 @@ class Settings:
             )
         if self.llm_provider == "openai" and not self.openai_api_key:
             raise RuntimeError("LLM_PROVIDER=openai, но не задан OPENAI_API_KEY")
-        if self.llm_provider == "gigachat" and not self.gigachat_credentials:
-            raise RuntimeError("LLM_PROVIDER=gigachat, но не задан GIGACHAT_CREDENTIALS")
-        # Эмбеддинги всегда считаются через GigaChat, независимо от чат-провайдера.
-        if not self.gigachat_credentials:
+        if self.llm_provider == "gigachat" and not self.gigachat_credentials and not self.gigachat_base_url:
             raise RuntimeError(
-                "Не задан GIGACHAT_CREDENTIALS — он обязателен: "
-                "эмбеддинги всегда считаются через GigaChat"
+                "LLM_PROVIDER=gigachat: задайте GIGACHAT_CREDENTIALS "
+                "или GIGACHAT_BASE_URL (для no-auth шлюза)"
+            )
+        # Эмбеддинги всегда считаются через GigaChat-совместимый API.
+        if not self.gigachat_credentials and not self.gigachat_base_url:
+            raise RuntimeError(
+                "Не задан ни GIGACHAT_CREDENTIALS, ни GIGACHAT_BASE_URL — нужен один из них: "
+                "эмбеддинги всегда идут через GigaChat-совместимый API"
             )
 
 
@@ -70,9 +77,11 @@ def load_settings() -> Settings:
         gigachat_embeddings_model=os.getenv(
             "GIGACHAT_EMBEDDINGS_MODEL", "EmbeddingsGigaR"
         ).strip(),
+        gigachat_base_url=os.getenv("GIGACHAT_BASE_URL", "").strip(),
         postgres_dsn=os.getenv(
             "POSTGRES_DSN", "postgresql://analyzer:analyzer@localhost:5432/analyzer"
         ).strip(),
+        postgres_schema=os.getenv("POSTGRES_SCHEMA", "").strip(),
         anomaly_zscore_threshold=float(os.getenv("ANOMALY_ZSCORE_THRESHOLD", "2.0")),
         embedding_dim=int(os.getenv("EMBEDDING_DIM", "2560")),
         default_dataset=os.getenv("DEFAULT_DATASET", "test_metrics.json").strip(),

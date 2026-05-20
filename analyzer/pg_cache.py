@@ -12,6 +12,7 @@ from typing import Any
 import psycopg
 from pgvector import Vector
 from pgvector.psycopg import register_vector
+from psycopg import sql
 
 from config import settings
 
@@ -27,9 +28,26 @@ class PgCache:
     def __init__(self, dsn: str | None = None, dim: int | None = None) -> None:
         self.dsn = dsn or settings.postgres_dsn
         self.dim = dim or settings.embedding_dim
+        self.schema = settings.postgres_schema or ""
         self.conn = psycopg.connect(self.dsn, autocommit=True)
+        self._init_search_path()
         self._init_schema()
         register_vector(self.conn)
+
+    def _init_search_path(self) -> None:
+        if not self.schema:
+            return
+        with self.conn.cursor() as cur:
+            cur.execute(
+                sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(
+                    sql.Identifier(self.schema)
+                )
+            )
+            cur.execute(
+                sql.SQL("SET search_path TO {}, public, ext").format(
+                    sql.Identifier(self.schema)
+                )
+            )
 
     def _existing_dim(self, cur: Any) -> int | None:
         """Размерность вектора в уже существующей таблице, или None."""

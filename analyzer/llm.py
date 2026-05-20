@@ -22,12 +22,16 @@ def build_chat_model() -> Any:
     if provider == "gigachat":
         from langchain_gigachat import GigaChat
 
-        return GigaChat(
-            credentials=settings.gigachat_credentials,
-            scope=settings.gigachat_scope,
-            model=settings.llm_model,
-            verify_ssl_certs=settings.gigachat_verify_ssl,
-        )
+        kwargs: dict[str, Any] = {
+            "model": settings.llm_model,
+            "verify_ssl_certs": settings.gigachat_verify_ssl,
+        }
+        if settings.gigachat_credentials:
+            kwargs["credentials"] = settings.gigachat_credentials
+            kwargs["scope"] = settings.gigachat_scope
+        if settings.gigachat_base_url:
+            kwargs["base_url"] = settings.gigachat_base_url
+        return GigaChat(**kwargs)
 
     raise RuntimeError(
         f"Неизвестный LLM_PROVIDER: {provider!r} (ожидается 'openai' или 'gigachat')"
