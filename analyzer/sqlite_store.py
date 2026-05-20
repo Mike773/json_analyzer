@@ -132,8 +132,8 @@ class SqliteStore:
     def _element_clause(
         element: str | None, aggregate_default: bool = False
     ) -> tuple[str, list[Any]]:
-        """Фильтр по element. element=None: агрегат (IS NULL) либо без фильтра."""
-        if element is None:
+        """Фильтр по element. element=None/'': агрегат (IS NULL) либо без фильтра."""
+        if element is None or (isinstance(element, str) and element.strip() == ""):
             return (" AND m.element IS NULL", []) if aggregate_default else ("", [])
         return " AND m.element = ?", [element]
 
@@ -349,7 +349,7 @@ class SqliteStore:
         """
         where = "m.metric_name = ? AND m.date = ? AND m.person_is_me = 0"
         params: list[Any] = [name, date]
-        if element is None:
+        if element is None or (isinstance(element, str) and element.strip() == ""):
             where += " AND m.element IS NULL"
         else:
             where += " AND m.element = ?"
@@ -478,7 +478,7 @@ class SqliteStore:
         if metric:
             where += " AND m.metric_name = ?"
             params.append(metric)
-        if element is not None:
+        if element is not None and not (isinstance(element, str) and element.strip() == ""):
             where += " AND m.element = ?"
             params.append(element)
         # Сортировка выводит самые значимые строки первыми (NULL — в конец).

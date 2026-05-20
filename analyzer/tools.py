@@ -42,6 +42,18 @@ def _clean(value: Any) -> Any:
     return round(value, 2) if isinstance(value, float) else value
 
 
+def _blank_to_none(value: Any) -> Any:
+    """Пустая/пробельная строка → None.
+
+    Некоторые модели присылают аргумент как ``""`` вместо опускания, если считают
+    фильтр ненужным. Без нормализации это превращается в ``WHERE col = ''`` и
+    молча даёт 0 строк.
+    """
+    if isinstance(value, str) and value.strip() == "":
+        return None
+    return value
+
+
 def _compact_row(row: dict[str, Any]) -> dict[str, Any]:
     """Оставляет только значимые поля строки метрики без пустых значений."""
     return {k: _clean(row[k]) for k in _ROW_KEYS if row.get(k) is not None}
@@ -174,6 +186,9 @@ def build_tools(store: SqliteStore, pg: PgCache) -> list[StructuredTool]:
         person — ФИО (или часть) либо табельный номер; date — неделя (YYYY-MM-DD).
         element НЕ указан = агрегат по метрике; чтобы получить конкретный
         продукт/разрез — задай element явно."""
+        person = _blank_to_none(person)
+        element = _blank_to_none(element)
+        date = _blank_to_none(date)
         unknown = _unknown_metric(metric) or _unknown_person(person)
         if unknown:
             return unknown
@@ -188,6 +203,8 @@ def build_tools(store: SqliteStore, pg: PgCache) -> list[StructuredTool]:
         """Динамика метрики по неделям (поля wow_change_pct и trend) для одного
         человека. person ОБЯЗАТЕЛЕН. element не указан = агрегат. Чтобы найти, у
         кого сильнее всего спад/рост по всем сотрудникам, используй find_flags."""
+        person = _blank_to_none(person)
+        element = _blank_to_none(element)
         unknown = _unknown_metric(metric) or _unknown_person(person)
         if unknown:
             return unknown
@@ -202,6 +219,8 @@ def build_tools(store: SqliteStore, pg: PgCache) -> list[StructuredTool]:
         """Рейтинг сотрудников по метрике на конкретную неделю. Направление уже
         учтено: peer_rank=1 — лучший. element не указан = агрегат по сотруднику;
         post — фильтр по должности."""
+        element = _blank_to_none(element)
+        post = _blank_to_none(post)
         unknown = _unknown_metric(metric)
         if unknown:
             return unknown
@@ -215,6 +234,8 @@ def build_tools(store: SqliteStore, pg: PgCache) -> list[StructuredTool]:
     ) -> str:
         """Агрегация значений метрики (avg/min/max/sum/count) по группам.
         group_by: 'person' | 'element' | 'date' | 'post'."""
+        date = _blank_to_none(date)
+        element = _blank_to_none(element)
         unknown = _unknown_metric(metric)
         if unknown:
             return unknown
@@ -236,6 +257,9 @@ def build_tools(store: SqliteStore, pg: PgCache) -> list[StructuredTool]:
         отклонениями — не нужно дёргать get_metric по каждому компоненту. Для
         разбора состава метрики задавай metric и person (и date — иначе строк
         много)."""
+        metric = _blank_to_none(metric)
+        person = _blank_to_none(person)
+        date = _blank_to_none(date)
         unknown = (
             _unknown_metric(metric) if metric is not None else None
         ) or _unknown_person(person)
@@ -253,6 +277,10 @@ def build_tools(store: SqliteStore, pg: PgCache) -> list[StructuredTool]:
     ) -> str:
         """Список людей в датасете. role: 'me' (руководитель) | 'employee'.
         name_query — подстрока ФИО для поиска."""
+        role = _blank_to_none(role)
+        post = _blank_to_none(post)
+        depart = _blank_to_none(depart)
+        name_query = _blank_to_none(name_query)
         return _dump(
             {
                 "people": store.list_people(
@@ -280,6 +308,9 @@ def build_tools(store: SqliteStore, pg: PgCache) -> list[StructuredTool]:
         метрика бывает хуже плана, но с растущим трендом, и наоборот.
         Чтобы сфокусировать выдачу, задавай metric (и date). Фильтры
         date/metric/element опциональны."""
+        date = _blank_to_none(date)
+        metric = _blank_to_none(metric)
+        element = _blank_to_none(element)
         # metric — необязательный фильтр; модель иногда присылает сюда мусор.
         # Неизвестное значение игнорируем и отдаём общий скан, а не пустоту.
         if metric and store.metric_type_of(metric) is None:
