@@ -1,0 +1,60 @@
+{
+  "object_name": "string",              // Имя объекта (ФИО сотрудника)
+  "metric_group_name": "string",        // Группа метрик
+  "metrics": [                          // Метрики
+    {
+      // Общие поля для всех метрик
+      "metric_id": "string",            // Уникальный ID метрики
+      "metric_name": "string",          // Название метрики
+      "metric_type": "string",          // Тип метрики (например, "Прямой")
+      "metric_description": "string",   // Описание метрики
+      "measure_type": "string",         // Единица измерения (шт., секунда, у.е.)
+      "calc_period": "string",          // Расчётный период (Неделя, Мес и т.д.)
+      "dt": "date",                     // Дата расчёта (YYYY-MM-DD)
+      "fact": "number",                 // Фактическое значение
+      "plan": "number",                 // Плановое значение (опционально)
+      "ex": "number",                   // % выполнения (опционально)
+      "bs": "number",                   // Базовое/Сравнительное значение
+
+      // История изменений
+      "history": [
+        {
+          "dt": "date",
+          "calc_period": "string",
+          "fact": "number",
+          "plan": "number",
+          "bs": "number"
+        }
+      ],
+
+      // Детализация по элементам (для составных метрик)
+      "details": [
+        {
+          "metric_id": "string",
+          "element_name": "string",     // Название элемента
+          "metric_type": "string",
+          "measure_type": "string",
+          "calc_period": "string",
+          "dt": "date",
+          "fact": "number",
+          "bs": "number",
+          "history": [ /* ... */ ]
+        }
+      ],
+
+      // Вложенные дочерние метрики
+      "children_metrics": [
+        {
+          "metric_id": "string",
+          "metric_name": "string",
+          "metric_type": "string",
+          "parent_metric": "string",         // Родительская метрика
+          "influence_percent": "number",     // % влияния
+          // ... остальные поля как у метрики
+          "details": [ /* ... */ ],
+          "children_metrics": [ /* ... */ ]
+        }
+      ]
+    }
+  ]
+}

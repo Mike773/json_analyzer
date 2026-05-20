@@ -1,0 +1,102 @@
+Чат-провайдер: gigachat (модель: GigaChat-2-Max)
+Датасеты: ['sample_good', 'sample_weak', 'sample_rising', 'sample_declining', 'sample_stable', 'test_metrics', 'test_metrics_agile']; ситуации: ['S1', 'S2', 'S3', 'S4', 'S5', 'S6']; вывод: eval_value_out/
+
+=== sample_good (samples/sample_good.json) ===
+  [S1] Холодный старт
+  [S1] -> 944 символов, tool_calls=0, completed=True (1.9s)
+  [S2] Размытый вопрос о состоянии
+  [S2] -> 1491 символов, tool_calls=21, completed=True (45.2s)
+  [S3] «Что мне делать»
+  [S3] -> 1094 символов, tool_calls=7, completed=True (14.9s)
+  [S4] Непонятный термин
+  [S4] -> 412 символов, tool_calls=1, completed=True (4.6s)
+  [S5] Запрос вне возможностей
+  [S5] -> 153 символов, tool_calls=0, completed=True (1.0s)
+  [S6] Переход по подсказке
+  [S6] -> 860 символов, tool_calls=8, completed=True (15.6s)
+
+=== sample_weak (samples/sample_weak.json) ===
+  [S1] Холодный старт
+  [S1] -> 975 символов, tool_calls=0, completed=True (1.7s)
+  [S2] Размытый вопрос о состоянии
+  [S2] -> 1167 символов, tool_calls=21, completed=True (47.1s)
+  [S3] «Что мне делать»
+  [S3] -> 1241 символов, tool_calls=21, completed=True (44.1s)
+  [S4] Непонятный термин
+  [S4] -> 465 символов, tool_calls=1, completed=True (4.7s)
+  [S5] Запрос вне возможностей
+  [S5] -> 259 символов, tool_calls=0, completed=True (1.3s)
+  [S6] Переход по подсказке
+  [S6] -> 801 символов, tool_calls=10, completed=True (18.1s)
+
+=== sample_rising (samples/sample_rising.json) ===
+  [S1] Холодный старт
+  [S1] -> 884 символов, tool_calls=0, completed=True (2.1s)
+  [S2] Размытый вопрос о состоянии
+  [S2] -> 1051 символов, tool_calls=21, completed=True (40.2s)
+  [S3] «Что мне делать»
+  [S3] -> 1399 символов, tool_calls=13, completed=True (27.6s)
+  [S4] Непонятный термин
+  [S4] -> 716 символов, tool_calls=1, completed=True (5.6s)
+  [S5] Запрос вне возможностей
+  [S5] -> 309 символов, tool_calls=0, completed=True (1.4s)
+  [S6] Переход по подсказке
+  [S6] -> 670 символов, tool_calls=7, completed=True (13.3s)
+
+=== sample_declining (samples/sample_declining.json) ===
+  [S1] Холодный старт
+  [S1] -> 904 символов, tool_calls=0, completed=True (2.0s)
+  [S2] Размытый вопрос о состоянии
+  [S2] -> 805 символов, tool_calls=21, completed=True (37.4s)
+  [S3] «Что мне делать»
+  [S3] -> 1176 символов, tool_calls=21, completed=True (42.7s)
+  [S4] Непонятный термин
+  [S4] -> 754 символов, tool_calls=1, completed=True (5.5s)
+  [S5] Запрос вне возможностей
+  [S5] -> 247 символов, tool_calls=0, completed=True (1.3s)
+  [S6] Переход по подсказке
+  [S6] -> 733 символов, tool_calls=8, completed=True (15.5s)
+
+=== sample_stable (samples/sample_stable.json) ===
+  [S1] Холодный старт
+  [S1] -> 881 символов, tool_calls=0, completed=True (1.7s)
+  [S2] Размытый вопрос о состоянии
+  [S2] -> 865 символов, tool_calls=19, completed=True (39.2s)
+  [S3] «Что мне делать»
+  [S3] -> 1465 символов, tool_calls=21, completed=True (40.9s)
+  [S4] Непонятный термин
+  [S4] -> 665 символов, tool_calls=1, completed=True (5.5s)
+  [S5] Запрос вне возможностей
+  [S5] -> 264 символов, tool_calls=0, completed=True (1.5s)
+  [S6] Переход по подсказке
+  [S6] -> 923 символов, tool_calls=21, completed=True (39.8s)
+
+=== test_metrics (samples/test_metrics.json) ===
+  [S1] Холодный старт
+  [S1] -> 998 символов, tool_calls=0, completed=True (2.2s)
+  [S2] Размытый вопрос о состоянии
+  [S2] -> 1504 символов, tool_calls=21, completed=True (68.2s)
+  [S3] «Что мне делать»
+  [S3] -> 1488 символов, tool_calls=7, completed=True (21.7s)
+  [S4] Непонятный термин
+  [S4] -> 634 символов, tool_calls=1, completed=True (5.6s)
+  [S5] Запрос вне возможностей
+  [S5] -> 283 символов, tool_calls=0, completed=True (1.4s)
+  [S6] Переход по подсказке
+  [S6] -> 740 символов, tool_calls=9, completed=True (19.6s)
+
+=== test_metrics_agile (samples/test_metrics_agile.json) ===
+  [S1] Холодный старт
+  [S1] -> 854 символов, tool_calls=0, completed=True (1.6s)
+  [S2] Размытый вопрос о состоянии
+  [S2] -> 1095 символов, tool_calls=8, completed=True (18.2s)
+  [S3] «Что мне делать»
+  [S3] -> 1932 символов, tool_calls=21, completed=True (47.2s)
+  [S4] Непонятный термин
+  [S4] -> 503 символов, tool_calls=1, completed=True (4.9s)
+  [S5] Запрос вне возможностей
+  [S5] -> 185 символов, tool_calls=0, completed=True (1.1s)
+  [S6] Переход по подсказке
+  [S6] -> 849 символов, tool_calls=17, completed=True (32.2s)
+
+Готово: 42 ситуаций за 12.5 мин. Дампы в eval_value_out/
