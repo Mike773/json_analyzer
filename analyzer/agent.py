@@ -78,6 +78,9 @@ _SYSTEM_PROMPT = """\
    собирай значения других недель как текущие.
 3. Если пользователь называет метрику, продукт (element) или человека неточно
    или описательно — разреши это через resolve_entity.
+3a. Если метрика помечена 'agg-' (нет агрегатной строки) — запрос без element
+   вернёт все её разрезы с пометкой 'разрезы_вместо_агрегата'; для rank по
+   такой метрике ОБЯЗАТЕЛЬНО передавай element из её списка.
 4. Направление метрики бери ТОЛЬКО из поля metric_type: 'прямая' — больше =
    лучше, 'обратная' — меньше = лучше. По названию метрики направление не
    угадывай. Готовый вердикт «лучше/в плане/хуже» уже посчитан с учётом
@@ -171,10 +174,22 @@ _BRIEF_PROMPT = """\
 """
 
 
+def _fmt_metric_entry(m: dict[str, Any]) -> str:
+    """Метрика в формате '<name> [agg+|agg-: A, B, ...]'. Тег показывает,
+    есть ли у метрики агрегатная строка; список — её element-значения."""
+    name = m["metric_name"]
+    # Дефолт True — обратная совместимость со схемами без поля.
+    tag = "agg+" if m.get("has_aggregate", True) else "agg-"
+    elems = m.get("elements") or []
+    return f"{name} [{tag}: {', '.join(elems)}]" if elems else f"{name} [{tag}]"
+
+
 def _format_facts(overview: dict[str, Any]) -> str:
     """Компактная сводка состава датасета для системного промпта."""
     dates = overview.get("dates") or []
-    metric_names = sorted({m["metric_name"] for m in overview.get("metrics", [])})
+    metric_entries = sorted(
+        {_fmt_metric_entry(m) for m in overview.get("metrics", [])}
+    )
     people = overview.get("people") or []
     posts = sorted({p["person_post"] for p in people if p.get("person_post")})
     departs = sorted({p["person_depart"] for p in people if p.get("person_depart")})
@@ -203,7 +218,11 @@ def _format_facts(overview: dict[str, Any]) -> str:
     lines = [
         "СОСТАВ ЗАГРУЖЕННОГО ДАТАСЕТА (используй эти точные значения в аргументах):",
         f"- Периоды по порядку: {periods}",
-        f"- Метрики: {'; '.join(metric_names)}",
+        f"- Метрики: {'; '.join(metric_entries)}",
+        "  Пометки: agg+ — у метрики есть агрегатная строка (element IS NULL); "
+        "agg- — только разрезы. Для agg- запрос без element вернёт все разрезы "
+        "с пометкой 'разрезы_вместо_агрегата'; для rank по agg- метрике "
+        "ОБЯЗАТЕЛЬНО указывай element.",
         f"- Должности: {', '.join(posts)}",
         f"- Подразделения: {', '.join(departs)}",
         f"- Значения element (продукты/разрезы): {', '.join(elements)}",

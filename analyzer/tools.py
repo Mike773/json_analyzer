@@ -185,7 +185,10 @@ def build_tools(store: SqliteStore, pg: PgCache) -> list[StructuredTool]:
         статусы отклонений, динамика, тренд, peer-ранг, флаг аномалии.
         person — ФИО (или часть) либо табельный номер; date — неделя (YYYY-MM-DD).
         element НЕ указан = агрегат по метрике; чтобы получить конкретный
-        продукт/разрез — задай element явно."""
+        продукт/разрез — задай element явно. Если у метрики нет агрегатной
+        строки (см. agg- в составе датасета), вернутся все строки разрезов с
+        пометкой 'разрезы_вместо_агрегата' — используй их как есть либо
+        повтори с конкретным element."""
         person = _blank_to_none(person)
         element = _blank_to_none(element)
         date = _blank_to_none(date)
@@ -201,8 +204,10 @@ def build_tools(store: SqliteStore, pg: PgCache) -> list[StructuredTool]:
         dates: list[str] | None = None,
     ) -> str:
         """Динамика метрики по неделям (поля wow_change_pct и trend) для одного
-        человека. person ОБЯЗАТЕЛЕН. element не указан = агрегат. Чтобы найти, у
-        кого сильнее всего спад/рост по всем сотрудникам, используй find_flags."""
+        человека. person ОБЯЗАТЕЛЕН. element не указан = агрегат. Если у метрики
+        нет агрегата (agg-), вернётся динамика по всем разрезам с пометкой
+        'разрезы_вместо_агрегата'. Чтобы найти, у кого сильнее всего спад/рост
+        по всем сотрудникам, используй find_flags."""
         person = _blank_to_none(person)
         element = _blank_to_none(element)
         unknown = _unknown_metric(metric) or _unknown_person(person)
@@ -218,7 +223,9 @@ def build_tools(store: SqliteStore, pg: PgCache) -> list[StructuredTool]:
     ) -> str:
         """Рейтинг сотрудников по метрике на конкретную неделю. Направление уже
         учтено: peer_rank=1 — лучший. element не указан = агрегат по сотруднику;
-        post — фильтр по должности."""
+        post — фильтр по должности. Если у метрики нет агрегата (agg- в
+        составе датасета), тула вернёт error со списком доступных element —
+        передай element и повтори."""
         element = _blank_to_none(element)
         post = _blank_to_none(post)
         unknown = _unknown_metric(metric)
@@ -256,7 +263,9 @@ def build_tools(store: SqliteStore, pg: PgCache) -> list[StructuredTool]:
         influent_percent). ОДИН вызов раскладывает метрику на компоненты со всеми
         отклонениями — не нужно дёргать get_metric по каждому компоненту. Для
         разбора состава метрики задавай metric и person (и date — иначе строк
-        много)."""
+        много). Если у метрики нет агрегата (agg- в составе датасета), корнями
+        становятся все её разрезы — в результате будет пометка
+        'разрезы_вместо_агрегата'."""
         metric = _blank_to_none(metric)
         person = _blank_to_none(person)
         date = _blank_to_none(date)

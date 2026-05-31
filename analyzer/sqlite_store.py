@@ -45,6 +45,9 @@ class SqliteStore:
         self.conn = sqlite3.connect(":memory:", check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self._create_schema()
+        # Ленивый кэш {metric_name: {"has_aggregate": bool, "elements": [...]}}.
+        # Данные иммутабельны после load(), пересчёта не требуется.
+        self._element_info_cache: dict[str, dict[str, Any]] = {}
 
     # ------------------------------------------------------------------ schema
     def _create_schema(self) -> None:
@@ -144,6 +147,33 @@ class SqliteStore:
         row = cur.fetchone()
         return row["metric_type"] if row else None
 
+    def _metric_element_info(self, name: str) -> dict[str, Any]:
+        """Есть ли у метрики агрегатная строка (element IS NULL) и какие у неё
+        конкретные element-значения. Двухэтапный запрос: GROUP_CONCAT(DISTINCT) в
+        SQLite не убирает NULL предсказуемо и не гарантирует порядок."""
+        cached = self._element_info_cache.get(name)
+        if cached is not None:
+            return cached
+        has_agg = (
+            self.conn.execute(
+                "SELECT 1 FROM metrics WHERE metric_name = ? "
+                "AND element IS NULL LIMIT 1",
+                (name,),
+            ).fetchone()
+            is not None
+        )
+        elements = [
+            r["element"]
+            for r in self.conn.execute(
+                "SELECT DISTINCT element FROM metrics WHERE metric_name = ? "
+                "AND element IS NOT NULL ORDER BY element",
+                (name,),
+            )
+        ]
+        info = {"has_aggregate": has_agg, "elements": elements}
+        self._element_info_cache[name] = info
+        return info
+
     def row_count(self) -> int:
         return self.conn.execute("SELECT COUNT(*) c FROM metrics").fetchone()["c"]
 
@@ -161,6 +191,12 @@ class SqliteStore:
                 "ORDER BY metric_name"
             )
         )
+        # Per-metric: есть ли агрегатная строка и какие element-значения.
+        # Заодно прогревает кэш для последующих fallback'ов в get_metric и др.
+        for m in metrics:
+            info = self._metric_element_info(m["metric_name"])
+            m["has_aggregate"] = bool(info["has_aggregate"])
+            m["elements"] = info["elements"]
         elements = [
             r["element"]
             for r in self.conn.execute(
@@ -293,13 +329,30 @@ class SqliteStore:
         pc, pp = self._person_clause(person)
         where += pc
         params += pp
-        ec, ep = self._element_clause(element, aggregate_default=True)
-        where += ec
-        params += ep
+        element_unspecified = element is None or (
+            isinstance(element, str) and element.strip() == ""
+        )
+        fallback_elements: list[str] | None = None
+        if element_unspecified:
+            info = self._metric_element_info(name)
+            if info["has_aggregate"]:
+                where += " AND m.element IS NULL"
+            else:
+                # Агрегата нет — иначе вернули бы пусто; отдаём все разрезы.
+                fallback_elements = info["elements"]
+        else:
+            where += " AND m.element = ?"
+            params.append(element)
         if date:
             where += " AND m.date = ?"
             params.append(date)
-        return self._select_metrics(where, params, limit=limit)
+        result = self._select_metrics(where, params, limit=limit)
+        if fallback_elements is not None:
+            result["разрезы_вместо_агрегата"] = (
+                "у метрики нет агрегатной строки; показаны все разрезы по element: "
+                + ", ".join(fallback_elements)
+            )
+        return result
 
     def compare(
         self,
@@ -324,16 +377,32 @@ class SqliteStore:
         pc, pp = self._person_clause(person)
         where += pc
         params += pp
-        ec, ep = self._element_clause(element, aggregate_default=True)
-        where += ec
-        params += ep
+        element_unspecified = element is None or (
+            isinstance(element, str) and element.strip() == ""
+        )
+        fallback_elements: list[str] | None = None
+        if element_unspecified:
+            info = self._metric_element_info(name)
+            if info["has_aggregate"]:
+                where += " AND m.element IS NULL"
+            else:
+                fallback_elements = info["elements"]
+        else:
+            where += " AND m.element = ?"
+            params.append(element)
         if dates:
             placeholders = ", ".join("?" for _ in dates)
             where += f" AND m.date IN ({placeholders})"
             params += list(dates)
-        return self._select_metrics(
+        result = self._select_metrics(
             where, params, order="m.person_fio, m.element, m.date", limit=limit
         )
+        if fallback_elements is not None:
+            result["разрезы_вместо_агрегата"] = (
+                "у метрики нет агрегатной строки; динамика показана по всем "
+                "разрезам element: " + ", ".join(fallback_elements)
+            )
+        return result
 
     def rank(
         self,
@@ -345,11 +414,26 @@ class SqliteStore:
     ) -> dict[str, Any]:
         """Рейтинг сотрудников по метрике на дату (использует peer_rank).
 
-        element=None означает агрегат (element IS NULL).
+        element=None означает агрегат (element IS NULL). Если у метрики нет
+        агрегатной строки, возвращает error со списком доступных element —
+        ранг по разным peer-группам одновременно бессмыслен.
         """
         where = "m.metric_name = ? AND m.date = ? AND m.person_is_me = 0"
         params: list[Any] = [name, date]
         if element is None or (isinstance(element, str) and element.strip() == ""):
+            info = self._metric_element_info(name)
+            if not info["has_aggregate"]:
+                return {
+                    "error": (
+                        f"У метрики '{name}' нет агрегатной строки — рейтинг "
+                        "строится по одному конкретному разрезу. Передай "
+                        "element и повтори."
+                    ),
+                    "rows": [],
+                    "count": 0,
+                    "metric_type": self.metric_type_of(name),
+                    "elements": info["elements"],
+                }
             where += " AND m.element IS NULL"
         else:
             where += " AND m.element = ?"
@@ -411,10 +495,20 @@ class SqliteStore:
         # При заданной метрике корнем берётся агрегат (element IS NULL): состав
         # метрики — это её child_metrics, а не разрезы по element. Рекурсия ниже
         # подтянет всех потомков независимо от element.
-        root_where = (
-            "depth = 1" if name is None else "metric_name = ? AND element IS NULL"
-        )
-        root_params: list[Any] = [] if name is None else [name]
+        fallback_elements: list[str] | None = None
+        if name is None:
+            root_where = "depth = 1"
+            root_params: list[Any] = []
+        else:
+            info = self._metric_element_info(name)
+            if info["has_aggregate"]:
+                root_where = "metric_name = ? AND element IS NULL"
+            else:
+                # Агрегата нет — корнями становятся все разрезы метрики; у
+                # каждого свой metric_uid и свои потомки, дублей не будет.
+                root_where = "metric_name = ?"
+                fallback_elements = info["elements"]
+            root_params = [name]
         pc, pp = self._person_clause(person)
         root_where += pc.replace("m.", "")
         root_params += pp
@@ -438,11 +532,17 @@ class SqliteStore:
             "ORDER BY m.person_fio, m.depth, m.metric_uid LIMIT ?"
         )
         rows = self._rows(self.conn.execute(sql, [*root_params, limit + 1]))
-        return {
+        result: dict[str, Any] = {
             "rows": rows[:limit],
             "count": min(len(rows), limit),
             "truncated": len(rows) > limit,
         }
+        if fallback_elements is not None:
+            result["разрезы_вместо_агрегата"] = (
+                "у метрики нет агрегатной строки; дерево развернуто от всех "
+                "разрезов element: " + ", ".join(fallback_elements)
+            )
+        return result
 
     def find_flags(
         self,
